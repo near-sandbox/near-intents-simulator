@@ -1,0 +1,43 @@
+{
+  "name": "@near-sandbox/near-intents-simulator",
+  "version": "0.1.0",
+  "description": "NEAR Intents (1Click API) simulator for localnet with real NEAR RPC support",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "echo 'No tests yet' && exit 0",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/near-sandbox/near-intents-simulator.git"
+  },
+  "keywords": [
+    "near",
+    "intents",
+    "1click",
+    "simulator",
+    "localnet",
+    "blockchain"
+  ],
+  "author": "TelcoPay",
+  "license": "MIT",
+  "dependencies": {
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/uuid": "^9.0.7",
+    "typescript": "^5.3.3"
+  }
+}
