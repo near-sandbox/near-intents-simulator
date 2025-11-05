@@ -1,0 +1,631 @@
+---
+description: Code quality standards, TypeScript best practices, and maintenance guidelines for the NEAR Intents Simulator
+applicablePhases: [1, 2, 3]
+alwaysApply: false
+---
+
+# Code Quality Standards
+
+**TypeScript best practices, code organization, and maintenance guidelines for the NEAR Intents Simulator**
+
+## TypeScript Best Practices
+
+### Type Safety
+
+#### Strict Null Checks
+```typescript
+// ✅ Good: Explicit null checks
+function processSwap(swapId: string | null): SwapResult | null {
+  if (!swapId) {
+    return null;
+  }
+
+  const swap = this.swaps.get(swapId);
+  if (!swap) {
+    return null;
+  }
+
+  return {
+    id: swapId,
+    status: swap.status,
+    details: swap.swapDetails
+  };
+}
+
+// ❌ Bad: Implicit any or null handling
+function processSwap(swapId: string) {
+  const swap = this.swaps.get(swapId); // Could be undefined
+  return swap.details; // Could crash if swap is undefined
+}
+```
+
+#### Union Types for State
+```typescript
+// ✅ Good: Explicit state types
+type SwapStatus =
+  | 'PENDING_DEPOSIT'
+  | 'PROCESSING'
+  | 'SUCCESS'
+  | 'INCOMPLETE_DEPOSIT'
+  | 'REFUNDED'
+  | 'FAILED';
+
+// Use in interfaces
+interface SwapResult {
+  status: SwapStatus;
+  error?: string; // Only present when status === 'FAILED'
+}
+
+// ❌ Bad: String literals
+interface SwapResult {
+  status: string; // Could be any string
+  error?: string; // No type safety
+}
+```
+
+#### Generic Constraints
+```typescript
+// ✅ Good: Constrained generics
+interface AssetIdentifier<T extends string = string> {
+  chain: T;
+  token: T;
+  decimals: number;
+  symbol: string;
+}
+
+// Usage
+const nearAsset: AssetIdentifier<'near'> = {
+  chain: 'near',
+  token: 'wrap.near',
+  decimals: 24,
+  symbol: 'wNEAR'
+};
+
+// ❌ Bad: Unconstrained generics
+interface AssetIdentifier<T> {
+  chain: T;
+  token: T;
+  // No constraints - T could be anything
+}
+```
+
+### Interface Design
+
+#### Composition over Inheritance
+```typescript
+// ✅ Good: Interface composition
+interface BaseQuote {
+  amountIn: string;
+  amountOut: string;
+  fee: string;
+}
+
+interface CrossChainQuote extends BaseQuote {
+  bridgeFee: string;
+  estimatedBridgeTime: number;
+}
+
+interface SameChainQuote extends BaseQuote {
+  poolFee: string;
+  slippage: number;
+}
+
+// ❌ Bad: Inheritance with overrides
+interface Quote {
+  amountIn: string;
+  amountOut: string;
+  fee: string;
+  bridgeFee?: string;     // Optional properties
+  poolFee?: string;       // make interfaces unclear
+  slippage?: number;
+}
+```
+
+#### Readonly Properties
+```typescript
+// ✅ Good: Immutable configuration
+interface SimulatorConfig {
+  readonly crossChain: CrossChainAdapter;
+  readonly nearExec?: NearExecutionAdapter;
+  readonly feeRate: number;
+}
+
+// Usage
+const config: SimulatorConfig = {
+  crossChain: adapter,
+  nearExec: executor,
+  feeRate: 0.003
+} as const;
+
+// config.feeRate = 0.005; // TypeScript error
+
+// ❌ Bad: Mutable configuration
+interface SimulatorConfig {
+  crossChain: CrossChainAdapter;
+  nearExec?: NearExecutionAdapter;
+  feeRate: number; // Can be modified
+}
+```
+
+### Error Handling
+
+#### Custom Error Types
+```typescript
+// ✅ Good: Specific error types
+export class ValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly field: string,
+    public readonly value: unknown
+  ) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+export class AdapterError extends Error {
+  constructor(
+    message: string,
+    public readonly adapter: string,
+    public readonly operation: string,
+    public readonly cause?: Error
+  ) {
+    super(message);
+    this.name = 'AdapterError';
+  }
+}
+
+// Usage
+throw new ValidationError('Invalid amount', 'amount', request.amount);
+
+// ❌ Bad: Generic errors
+throw new Error('Invalid amount: ' + request.amount); // No structure
+```
+
+#### Result Types
+```typescript
+// ✅ Good: Result type for operations that can fail
+type Result<T, E = Error> =
+  | { success: true; data: T }
+  | { success: false; error: E };
+
+interface QuoteResult extends Result<QuoteResponse, ValidationError> {}
+
+// Usage
+function requestQuote(request: QuoteRequest): Promise<QuoteResult> {
+  try {
+    const validation = validateRequest(request);
+    if (!validation.success) {
+      return Promise.resolve({ success: false, error: validation.error });
+    }
+
+    const quote = calculateQuote(request);
+    return Promise.resolve({ success: true, data: quote });
+  } catch (error) {
+    return Promise.resolve({
+      success: false,
+      error: new ValidationError('Quote calculation failed', 'request', request)
+    });
+  }
+}
+
+// ❌ Bad: Throwing errors everywhere
+async function requestQuote(request: QuoteRequest): Promise<QuoteResponse> {
+  if (!request.amount) {
+    throw new Error('Amount required'); // Hard to handle
+  }
+
+  return calculateQuote(request); // Throws on validation errors
+}
+```
+
+## Code Organization
+
+### File Structure
+```
+src/
+├── index.ts              # Main exports
+├── types.ts              # Type definitions
+├── config.ts             # Configuration
+├── factory.ts            # Factory functions
+├── intents/
+│   └── simulator.ts      # Core simulator
+└── shared/
+    └── utils.ts          # Shared utilities
+```
+
+### Import Organization
+```typescript
+// ✅ Good: Grouped imports
+import { IOneClickClient, QuoteRequest, QuoteResponse } from './types';
+import { getConfig } from './config';
+import { OneClickSimulator } from './intents/simulator';
+
+// ❌ Bad: Ungrouped imports
+import { IOneClickClient } from './types';
+import { getConfig } from './config';
+import { QuoteRequest } from './types';
+import { OneClickSimulator } from './intents/simulator';
+import { QuoteResponse } from './types';
+```
+
+### Export Patterns
+```typescript
+// ✅ Good: Named exports
+export { OneClickSimulator } from './intents/simulator';
+export { ProductionOneClickClient, createOneClickClient } from './factory';
+export type { IOneClickClient, QuoteRequest } from './types';
+
+// ❌ Bad: Default exports
+export { default as OneClickSimulator } from './intents/simulator';
+export default createOneClickClient;
+```
+
+## Performance Optimization
+
+### Memory Management
+```typescript
+// ✅ Good: Clean up completed swaps
+export class OneClickSimulator implements IOneClickClient {
+  private swaps: Map<string, StoredSwap> = new Map();
+  private readonly maxStoredSwaps = 1000;
+
+  private cleanupOldSwaps(): void {
+    if (this.swaps.size > this.maxStoredSwaps) {
+      // Remove swaps older than 1 hour
+      const cutoff = new Date(Date.now() - 60 * 60 * 1000);
+
+      for (const [id, swap] of this.swaps) {
+        if (swap.updatedAt < cutoff) {
+          this.swaps.delete(id);
+        }
+      }
+    }
+  }
+
+  // Call cleanup periodically
+  async requestQuote(request: QuoteRequest): Promise<QuoteResponse> {
+    this.cleanupOldSwaps();
+    // ... rest of implementation
+  }
+}
+```
+
+### Efficient Data Structures
+```typescript
+// ✅ Good: Map for O(1) lookups
+private swaps: Map<string, StoredSwap> = new Map();
+
+// ❌ Bad: Array with O(n) lookups
+private swaps: StoredSwap[] = [];
+
+private findSwap(quoteId: string): StoredSwap | undefined {
+  return this.swaps.find(swap => swap.quoteResponse.quoteId === quoteId); // O(n)
+}
+```
+
+### Async Best Practices
+```typescript
+// ✅ Good: Parallel execution where possible
+async simulateExecution(quoteId: string): Promise<void> {
+  const swap = this.swaps.get(quoteId);
+  if (!swap) return;
+
+  // Start both operations in parallel
+  const [nearResult, destResult] = await Promise.allSettled([
+    this.executeNearTransfer(swap),
+    this.executeDestinationTransfer(swap)
+  ]);
+
+  // Handle results
+  if (nearResult.status === 'rejected') {
+    swap.error = nearResult.reason.message;
+    swap.status = 'FAILED';
+  } else {
+    swap.swapDetails.nearTxHashes = [nearResult.value.txHash];
+    if (destResult.status === 'fulfilled') {
+      swap.swapDetails.destinationTxHash = destResult.value.txHash;
+    }
+    swap.status = 'SUCCESS';
+  }
+}
+
+// ❌ Bad: Sequential execution
+async simulateExecution(quoteId: string): Promise<void> {
+  // Execute NEAR transfer first
+  await this.executeNearTransfer(swap);
+
+  // Then execute destination (even if NEAR failed)
+  await this.executeDestinationTransfer(swap);
+}
+```
+
+## Testing Standards
+
+### Test Organization
+```typescript
+// ✅ Good: Descriptive test structure
+describe('OneClickSimulator', () => {
+  describe('Quote Calculation', () => {
+    describe('Fee Application', () => {
+      it('should apply 0.3% fee to NEAR transfers', async () => {
+        // Test implementation
+      });
+
+      it('should apply fee before slippage', async () => {
+        // Test implementation
+      });
+    });
+
+    describe('Slippage Tolerance', () => {
+      it('should use default 1% slippage when not specified', async () => {
+        // Test implementation
+      });
+
+      it('should respect custom slippage tolerance', async () => {
+        // Test implementation
+      });
+    });
+  });
+
+  describe('Swap Execution', () => {
+    describe('Success Cases', () => {
+      it('should complete same-chain swaps', async () => {
+        // Test implementation
+      });
+
+      it('should complete cross-chain swaps', async () => {
+        // Test implementation
+      });
+    });
+
+    describe('Error Cases', () => {
+      it('should handle adapter failures gracefully', async () => {
+        // Test implementation
+      });
+
+      it('should retry failed operations', async () => {
+        // Test implementation
+      });
+    });
+  });
+});
+```
+
+### Mock Implementations
+```typescript
+// ✅ Good: Proper mock implementations
+export class MockNearExecutor implements NearExecutionAdapter {
+  private transactions: Map<string, any> = new Map();
+
+  async sendNearTransfer(
+    sender: string,
+    encryptedKey: string,
+    recipient: string,
+    amountNear: string
+  ): Promise<{ txHash: string; blockHeight: number }> {
+    const txHash = this.generateTxHash();
+    const blockHeight = Math.floor(Date.now() / 1000);
+
+    this.transactions.set(txHash, {
+      sender,
+      recipient,
+      amount: amountNear,
+      timestamp: new Date(),
+      blockHeight
+    });
+
+    return { txHash, blockHeight };
+  }
+
+  // Helper methods for testing
+  getTransaction(txHash: string) {
+    return this.transactions.get(txHash);
+  }
+
+  getAllTransactions() {
+    return Array.from(this.transactions.values());
+  }
+
+  private generateTxHash(): string {
+    return 'mock_' + Math.random().toString(36).substring(2, 15);
+  }
+}
+
+// ❌ Bad: Incomplete mocks
+export class BadMockNearExecutor implements NearExecutionAdapter {
+  async sendNearTransfer() {
+    return { txHash: 'mock-hash', blockHeight: 12345 };
+    // No way to verify what was called or inspect results
+  }
+}
+```
+
+## Documentation Standards
+
+### JSDoc Comments
+```typescript
+// ✅ Good: Comprehensive JSDoc
+/**
+ * Requests a quote for an intent-based swap operation.
+ *
+ * This method calculates the expected output amount, fees, and route for a swap
+ * between the specified assets. The quote includes slippage protection and
+ * time estimates for execution.
+ *
+ * @param request - The quote request parameters
+ * @param request.swapType - Type of swap (EXACT_INPUT or EXACT_OUTPUT)
+ * @param request.originAsset - Source asset in "chain:token" format
+ * @param request.destinationAsset - Target asset in "chain:token" format
+ * @param request.amount - Amount in smallest unit (yoctoNEAR, wei, etc.)
+ * @param request.slippageTolerance - Optional slippage tolerance (default: 0.01)
+ * @param request.deadline - Optional deadline for quote validity
+ * @returns Promise resolving to quote response with unique ID
+ *
+ * @throws {ValidationError} When request parameters are invalid
+ * @throws {AdapterError} When cross-chain adapter fails
+ *
+ * @example
+ * ```typescript
+ * const quote = await simulator.requestQuote({
+ *   swapType: 'EXACT_INPUT',
+ *   originAsset: 'near:native',
+ *   destinationAsset: 'ethereum:usdc.eth',
+ *   amount: '1000000000000000000000000', // 1 NEAR
+ *   refundTo: 'alice.near',
+ *   recipient: '0x123...abc'
+ * });
+ * ```
+ */
+async requestQuote(request: QuoteRequest): Promise<QuoteResponse> {
+  // Implementation
+}
+
+// ❌ Bad: Missing or incomplete JSDoc
+// No documentation
+async requestQuote(request: QuoteRequest): Promise<QuoteResponse> {
+  // Implementation
+}
+```
+
+### Inline Comments
+```typescript
+// ✅ Good: Meaningful comments
+async calculateQuote(request: QuoteRequest): Promise<Quote> {
+  const [originChain, originToken] = request.originAsset.split(':');
+  const [destChain, destToken] = request.destinationAsset.split(':');
+
+  // Calculate fees (0.3% industry standard)
+  const amountInNum = parseFloat(request.amount);
+  const feePercent = 0.003;
+  const amountOutNum = amountInNum * (1 - feePercent);
+
+  // Apply slippage protection
+  const slippage = request.slippageTolerance || 0.01;
+  const amountOutWithSlippage = amountOutNum * (1 - slippage);
+
+  // Generate route based on cross-chain requirements
+  const isCrossChain = originChain !== destChain;
+
+  return {
+    depositAddress: this.calculateDepositAddress(request, originChain),
+    amountIn: request.amount,
+    amountOut: amountOutWithSlippage.toFixed(this.getDecimals(destChain, destToken)),
+    amountOutFormatted: this.formatAmount(amountOutWithSlippage, destChain, destToken),
+    deadline: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    timeEstimate: isCrossChain ? 45 : 7,
+    fee: (amountInNum * feePercent).toFixed(this.getDecimals(originChain, originToken)),
+    route: this.calculateRoute(originChain, destChain, originToken, destToken)
+  };
+}
+
+// ❌ Bad: Noisy or obvious comments
+async calculateQuote(request: QuoteRequest): Promise<Quote> {
+  // Split the origin asset
+  const [originChain, originToken] = request.originAsset.split(':');
+  // Split the destination asset
+  const [destChain, destToken] = request.destinationAsset.split(':');
+
+  // Calculate amount out number
+  const amountInNum = parseFloat(request.amount);
+  // Calculate fee percent
+  const feePercent = 0.003;
+  // Calculate amount out after fee
+  const amountOutNum = amountInNum * (1 - feePercent);
+
+  // Apply slippage
+  const slippage = request.slippageTolerance || 0.01;
+  const amountOutWithSlippage = amountOutNum * (1 - slippage);
+
+  // Check if cross chain
+  const isCrossChain = originChain !== destChain;
+
+  // Return quote object
+  return {
+    // Deposit address
+    depositAddress: this.calculateDepositAddress(request, originChain),
+    // Amount in
+    amountIn: request.amount,
+    // Amount out
+    amountOut: amountOutWithSlippage.toFixed(this.getDecimals(destChain, destToken)),
+    // Formatted amount out
+    amountOutFormatted: this.formatAmount(amountOutWithSlippage, destChain, destToken),
+    // Deadline
+    deadline: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    // Time estimate
+    timeEstimate: isCrossChain ? 45 : 7,
+    // Fee
+    fee: (amountInNum * feePercent).toFixed(this.getDecimals(originChain, originToken)),
+    // Route
+    route: this.calculateRoute(originChain, destChain, originToken, destToken)
+  };
+}
+```
+
+## Logging Standards
+
+### Consistent Log Format
+```typescript
+// ✅ Good: Structured logging
+console.log('🔄 [INTENTS] Requesting quote:', {
+  quoteId: generatedId,
+  from: request.originAsset,
+  to: request.destinationAsset,
+  amount: request.amount,
+  slippage: request.slippageTolerance || 0.01
+});
+
+// Success logs
+console.log('✅ [INTENTS] Quote generated:', {
+  quoteId,
+  amountOutFormatted: quote.amountOutFormatted,
+  timeEstimate: quote.timeEstimate,
+  routeSteps: quote.route.steps.length
+});
+
+// Error logs
+console.error('❌ [INTENTS] Quote calculation failed:', {
+  error: error.message,
+  request: request,
+  stack: error.stack
+});
+
+// ❌ Bad: Inconsistent logging
+console.log('Quote requested for ' + request.originAsset + ' to ' + request.destinationAsset);
+console.log('SUCCESS: Generated quote');
+console.error('Error: ' + error);
+```
+
+## Code Review Checklist
+
+### Before Committing
+- [ ] All TypeScript errors resolved (`npm run build`)
+- [ ] Tests pass (`npm test`)
+- [ ] No console.log statements in production code
+- [ ] JSDoc comments added for public APIs
+- [ ] No unused imports or variables
+- [ ] Consistent code formatting
+- [ ] Error handling implemented
+- [ ] Types are properly exported
+
+### Type Safety Checklist
+- [ ] No `any` types (except in mocks/tests)
+- [ ] Proper union types for state
+- [ ] Readonly properties where appropriate
+- [ ] Interface composition over inheritance
+- [ ] Custom error types instead of generic Error
+
+### Performance Checklist
+- [ ] No O(n) operations in hot paths
+- [ ] Memory leaks prevented (cleanup old data)
+- [ ] Async operations use Promise.all where appropriate
+- [ ] Large data structures use Maps/Sets for O(1) access
+
+### Testing Checklist
+- [ ] Unit tests for all public methods
+- [ ] Error case testing
+- [ ] Mock implementations for external dependencies
+- [ ] Performance tests for critical paths
+- [ ] Integration tests for adapter interactions
+
+Following these standards ensures maintainable, type-safe, and performant code throughout the NEAR Intents Simulator development lifecycle.

@@ -1,0 +1,388 @@
+---
+description: NEAR Intents Protocol architecture patterns for simulator development
+applicablePhases: [1, 2, 3]
+alwaysApply: false
+---
+
+# NEAR Intents Architecture Patterns
+
+**Expert guidance on NEAR Intents Protocol implementation within the simulator context**
+
+## Intents Protocol Overview
+
+NEAR Intents is a revolutionary transaction framework that abstracts blockchain complexity. Users declare **what** they want, not **how** to achieve it. The simulator implements this pattern for localnet development.
+
+### Core Principle
+> Intents are high-level declarations of desired outcomes that solver networks compete to fulfill optimally.
+
+## Simulator Architecture
+
+### Quote Calculation Flow
+```typescript
+// 1. Parse assets and validate
+const [originChain, originToken] = request.originAsset.split(':');
+const [destChain, destToken] = request.destinationAsset.split(':');
+
+// 2. Calculate amounts with fees
+const amountInNum = parseFloat(request.amount);
+const feePercent = 0.003; // 0.3% fee
+const amountOutNum = amountInNum * (1 - feePercent);
+
+// 3. Apply slippage tolerance
+const slippage = request.slippageTolerance || 0.01;
+const amountOutWithSlippage = amountOutNum * (1 - slippage);
+
+// 4. Generate route based on chains
+const isCrossChain = originChain !== destChain;
+const route = isCrossChain ? crossChainRoute : sameChainRoute;
+```
+
+### Execution Simulation Flow
+```typescript
+// 1. Validate and prepare
+this.validateQuoteRequest(request);
+const quote = await this.calculateQuote(request);
+
+// 2. Store initial state
+this.swaps.set(quoteId, {
+  status: 'PENDING_DEPOSIT',
+  quoteResponse,
+  createdAt: new Date()
+});
+
+// 3. Auto-execute (non-dry-run)
+if (!request.dry) {
+  setTimeout(() => this.simulateExecution(quoteId), 1000);
+}
+```
+
+## Key Design Patterns
+
+### Asset Registry Pattern
+```typescript
+private getDecimals(chain: string, token: string): number {
+  const key = `${chain}:${token}`;
+  return {
+    'near:native': 24,           // yoctoNEAR (10^-24)
+    'near:wrap.near': 24,        // wNEAR
+    'ethereum:native': 18,       // wei (10^-18)
+    'ethereum:usdc.eth': 6,      // USDC decimals
+    'bitcoin:native': 8,         // satoshi (10^-8)
+  }[key] || 18;                  // default
+}
+```
+
+### Route Calculation Pattern
+```typescript
+const route = isCrossChain
+  ? [
+      {
+        from: originSymbol,
+        to: `${originSymbol} (bridged)`,
+        protocol: 'rainbow-bridge'
+      },
+      {
+        from: `${originSymbol} (bridged)`,
+        to: destSymbol,
+        protocol: 'uniswap-v3'
+      }
+    ]
+  : [
+      {
+        from: originSymbol,
+        to: destSymbol,
+        protocol: 'ref-finance'
+      }
+    ];
+```
+
+### Transaction Simulation Pattern
+```typescript
+private async simulateExecution(quoteId: string): Promise<void> {
+  // 1. Update status to PROCESSING
+  swap.status = 'PROCESSING';
+
+  // 2. Simulate network delay
+  await new Promise(resolve =>
+    setTimeout(resolve, quote.timeEstimate * 100)
+  );
+
+  // 3. Execute NEAR transfer (real or mock)
+  const nearTxHash = await this.executeNearTransfer(swap);
+
+  // 4. Execute destination transfer
+  const destTxHash = isCrossChain
+    ? await crossChain.simulateDestinationTx({ chain, correlateTo: nearTxHash })
+    : undefined;
+
+  // 5. Update to SUCCESS with details
+  swap.status = 'SUCCESS';
+  swap.swapDetails = { nearTxHashes: [nearTxHash], destinationTxHash: destTxHash };
+}
+```
+
+## Fee Model Implementation
+
+### Standard Fee Structure
+```typescript
+const feePercent = 0.003; // 0.3% - industry standard for DEX aggregators
+const feeAmount = amountInNum * feePercent;
+
+// Fee is deducted from output amount
+const amountOutAfterFee = amountInNum * (1 - feePercent);
+```
+
+### Slippage Protection
+```typescript
+// Apply user-specified slippage tolerance
+const slippage = request.slippageTolerance || 0.01; // 1% default
+const minimumOutput = amountOutAfterFee * (1 - slippage);
+
+// Ensure quote.amountOut >= minimumOutput
+```
+
+## Error Handling Patterns
+
+### Validation Pattern
+```typescript
+private validateQuoteRequest(request: QuoteRequest): void {
+  if (!request.originAsset || !request.destinationAsset) {
+    throw new Error('Origin and destination assets required');
+  }
+
+  if (!request.amount || parseFloat(request.amount) <= 0) {
+    throw new Error('Valid amount required');
+  }
+
+  if (!request.refundTo || !request.recipient) {
+    throw new Error('Refund and recipient addresses required');
+  }
+
+  // Validate asset format (chain:token)
+  if (!request.originAsset.includes(':') || !request.destinationAsset.includes(':')) {
+    throw new Error('Invalid asset format: use chain:token');
+  }
+}
+```
+
+### Execution Error Recovery
+```typescript
+try {
+  // Attempt real NEAR execution
+  const result = await this.nearExec.sendNearTransfer(/*...*/);
+  nearTxHash = result.txHash;
+} catch (error) {
+  console.warn('[INTENTS] Real execution failed, using mock:', error.message);
+  nearTxHash = this.generateMockTxHash('NEAR');
+}
+```
+
+## Logging Standards
+
+### Consistent Log Format
+```typescript
+// Info logs for normal flow
+console.log('🔄 [INTENTS] Requesting quote:', { from, to, amount });
+
+// Success logs
+console.log('✅ [INTENTS] Quote generated:', { quoteId, amountOut, timeEstimate });
+
+// Error logs
+console.error('❌ [INTENTS] Swap failed:', error.message);
+
+// Warning logs for fallbacks
+console.warn('[INTENTS] Using mock transaction (no real adapter)');
+```
+
+### Log Categories
+- `🔄 [INTENTS]` - Processing/calculation steps
+- `✅ [INTENTS]` - Successful operations
+- `❌ [INTENTS]` - Errors and failures
+- `⚙️  [INTENTS]` - Execution details
+- `🔗 [INTENTS]` - Cross-chain operations
+
+## Asset Management
+
+### Supported Chain Format
+```
+near:native              → NEAR token
+near:wrap.near           → Wrapped NEAR
+ethereum:native          → ETH
+ethereum:usdc.eth        → USDC on Ethereum
+bitcoin:native           → BTC
+```
+
+### Adding New Assets
+```typescript
+// 1. Add to decimals registry
+'polygon:native': 18,
+'polygon:usdc.polygon': 6,
+
+// 2. Add to symbol registry
+'polygon:native': 'MATIC',
+'polygon:usdc.polygon': 'USDC',
+
+// 3. Update route logic if needed
+case 'polygon': return 'polygon-bridge';
+```
+
+## Cross-Chain Patterns
+
+### Address Derivation
+```typescript
+// For cross-chain swaps, derive destination address
+if (originChain !== 'near') {
+  const derived = await this.crossChain.deriveAddress(
+    request.refundTo,     // NEAR account
+    originChain          // target chain
+  );
+  depositAddress = derived.address;
+}
+```
+
+### Destination Simulation
+```typescript
+// Simulate destination chain transaction
+const destTxHash = await this.crossChain.simulateDestinationTx({
+  chain: destChain,
+  correlateTo: nearTxHash  // Link to NEAR transaction
+});
+```
+
+## Time Estimation Logic
+
+### Cross-Chain Timing
+```typescript
+const isCrossChain = originChain !== destChain;
+const timeEstimate = isCrossChain ? 45 : 7; // seconds
+
+// Breakdown:
+// Same chain: ~7 seconds (NEAR finality + DEX)
+// Cross-chain: ~45 seconds (NEAR + bridge + destination finality)
+```
+
+### Deadline Calculation
+```typescript
+const deadline = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+// 5 minutes from now (industry standard)
+```
+
+## Mock Transaction Generation
+
+### Hash Format by Chain
+```typescript
+private generateMockTxHash(chain: string): string {
+  const prefix = {
+    NEAR: '',           // Base58 format
+    ETHEREUM: '0x',     // Hex format
+    BITCOIN: '',        // Base58 format
+  }[chain] || '';
+
+  const hash = Array.from({ length: 64 }, () =>
+    Math.floor(Math.random() * 16).toString(16)
+  ).join('');
+
+  return prefix + hash;
+}
+```
+
+## State Management
+
+### Swap Storage Pattern
+```typescript
+interface StoredSwap {
+  quoteResponse: QuoteResponse;
+  status: SwapStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  swapDetails?: SwapDetails;
+  error?: string;
+}
+
+// In-memory storage (Phase 1)
+// TODO: Add persistence for Phase 2
+private swaps: Map<string, StoredSwap> = new Map();
+```
+
+### Status Transition Flow
+```
+PENDING_DEPOSIT → PROCESSING → SUCCESS
+                     ↓
+                  FAILED (with error)
+```
+
+## Best Practices
+
+### Code Organization
+1. **Separate concerns**: Quote calculation vs execution simulation
+2. **Consistent naming**: Use `camelCase` for variables, `PascalCase` for types
+3. **Early validation**: Validate inputs before processing
+4. **Graceful degradation**: Fallback to mocks when real execution fails
+
+### Performance Considerations
+1. **Async operations**: All I/O operations should be async
+2. **Memory management**: Clean up completed swaps periodically
+3. **Error isolation**: Failures shouldn't crash the entire simulator
+4. **Logging efficiency**: Don't log sensitive data
+
+### Extensibility Patterns
+1. **Registry pattern**: Easy to add new assets/chains/protocols
+2. **Adapter pattern**: Pluggable execution and cross-chain adapters
+3. **Factory pattern**: Environment-based client selection
+4. **Configuration pattern**: Environment-driven behavior
+
+## Common Implementation Patterns
+
+### Quote Amount Formatting
+```typescript
+const amountOutFormatted = `${amountOutWithSlippage.toFixed(2)} ${destSymbol}`;
+// Example: "99.70 USDC"
+```
+
+### Fee Calculation
+```typescript
+const fee = (amountInNum * feePercent).toFixed(originDecimals);
+// Preserve decimal precision for the origin asset
+```
+
+### Route Protocol Selection
+```typescript
+const getProtocol = (fromChain: string, toChain: string): string => {
+  if (fromChain === 'near' && toChain === 'ethereum') return 'rainbow-bridge';
+  if (fromChain === 'ethereum' && toChain === 'near') return 'rainbow-bridge';
+  if (fromChain === toChain) return 'ref-finance';
+  return 'uniswap-v3'; // default DEX
+};
+```
+
+## Testing Considerations
+
+### Unit Test Patterns
+```typescript
+describe('Quote Calculation', () => {
+  it('should calculate fees correctly', () => {
+    const result = simulator.calculateQuote(testRequest);
+    expect(result.fee).toBe('3000000000000000000000'); // 0.3 NEAR
+  });
+
+  it('should apply slippage tolerance', () => {
+    const request = { ...testRequest, slippageTolerance: 0.02 };
+    const result = simulator.calculateQuote(request);
+    // Verify minimum output calculation
+  });
+});
+```
+
+### Integration Test Patterns
+```typescript
+describe('Full Swap Flow', () => {
+  it('should complete swap with mock adapters', async () => {
+    const quote = await simulator.requestQuote(request);
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for execution
+    const status = await simulator.getSwapStatus(quote.quoteId);
+    expect(status.status).toBe('SUCCESS');
+  });
+});
+```
+
+This architecture ensures the simulator provides a realistic, production-shaped experience while remaining flexible for testing and development scenarios.
