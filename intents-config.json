@@ -1,0 +1,20 @@
+{
+  "mode": "simulator",
+  "near": {
+    "rpc_url": "http://10.0.55.70:3030",
+    "network_id": "localnet"
+  },
+  "chain_signatures": {
+    "contract_id": "v1.signer.node0",
+    "mpc_nodes": [
+      "http://10.0.159.147:8080",
+      "http://10.0.160.75:8080",
+      "http://10.0.175.210:8080"
+    ]
+  },
+  "supported_chains": ["near", "ethereum", "bitcoin"],
+  "faucet": {
+    "endpoint": "arn:aws:lambda:us-east-1:311843862895:function:near-localnet-faucet"
+  }
+}
+

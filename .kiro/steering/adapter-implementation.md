@@ -1,11 +1,5 @@
 ---
-description: Implementation guidance for NearExecutionAdapter and CrossChainAdapter interfaces
-globs:
-  - "src/**/*adapter*.ts"
-  - "src/**/*Adapter*.ts"
-  - "**/adapters/**/*.ts"
-applicablePhases: [1, 2, 3]
-alwaysApply: false
+inclusion: always
 ---
 
 # Adapter Implementation Guide

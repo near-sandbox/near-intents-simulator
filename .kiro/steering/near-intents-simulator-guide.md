@@ -1,6 +1,5 @@
 ---
-alwaysApply: true
-description: NEAR Intents Simulator project overview and navigation guide - always apply this first
+inclusion: always
 ---
 
 # NEAR Intents Simulator Project Guide
@@ -12,24 +11,6 @@ description: NEAR Intents Simulator project overview and navigation guide - alwa
 NEAR Intents Simulator is a TypeScript library that simulates NEAR's 1Click API (Intents Protocol) for localnet development. It provides production-shaped interfaces with real NEAR RPC support via dependency injection.
 
 **Current Status**: **Phase 1 - Core Simulator Implementation** ✅
-
-## Layer Architecture Position
-
-**This is Layer 4 of the 5-layer NEAR Localnet Simulator Stack:**
-
-```
-Layer 1: NEAR Base          → AWSNodeRunner
-Layer 2: NEAR Services      → near-localnet-services  
-Layer 3: Chain Signatures   → cross-chain-simulator (includes MPC)
-Layer 4: Intents Protocol   → This repository ← YOU ARE HERE
-Layer 5: User Applications  → Your dApp
-```
-
-**Dependencies**: 
-- Requires Layer 3 (Chain Signatures) to be deployed
-- Uses `@near-sandbox/cross-chain-simulator` package
-
-**Architecture Reference**: See `/CORRECTED_ARCHITECTURE.md` for complete stack details.
 
 ### What Works Now (Phase 1)
 - ✅ TypeScript library with proper compilation

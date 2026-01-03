@@ -1,10 +1,5 @@
 ---
-description: NEAR Intents Protocol architecture patterns for simulator development
-globs:
-  - "src/intents/**/*.ts"
-  - "src/**/simulator*.ts"
-applicablePhases: [1, 2, 3]
-alwaysApply: false
+inclusion: always
 ---
 
 # NEAR Intents Architecture Patterns

@@ -1,0 +1,1 @@
+can you generate cursor rules for this project and place the .mdc files in .cursor/rules.  ensure you follow @Cursor rules best practices and to their edge capabiltiies

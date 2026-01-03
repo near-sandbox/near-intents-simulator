@@ -1,0 +1,625 @@
+---
+inclusion: always
+---
+
+# Integration with cross-chain-simulator
+
+**Complete guide for integrating with the @near-sandbox/cross-chain-simulator module for real NEAR and MPC infrastructure**
+
+## Overview
+
+The NEAR Intents Simulator depends on `@near-sandbox/cross-chain-simulator` to access real blockchain infrastructure:
+
+- **NEAR Localnet**: Real NEAR blockchain running locally (not mocked)
+- **MPC Network**: Real MPC nodes for Chain Signatures ([github.com/near/mpc](https://github.com/near/mpc))
+- **Configuration**: RPC URLs, contract addresses, MPC endpoints
+
+## Architecture: Real Infrastructure Stack
+
+```
+┌─────────────────────────────────────────┐
+│   NEAR Intents Simulator (This Repo)   │
+│  - Quote calculation                    │
+│  - Execution orchestration              │
+│  - Adapter interfaces                   │
+└────────────┬────────────────────────────┘
+             │ imports config
+             ▼
+┌─────────────────────────────────────────┐
+│   @near-sandbox/cross-chain-simulator  │
+│  - getNearRpcUrl()                     │
+│  - getMpcContractId()                  │
+│  - getMpcNodes()                       │
+│  - LocalnetConfig type                 │
+└────────────┬────────────────────────────┘
+             │ orchestrates
+             ▼
+┌─────────────────────────────────────────┐
+│   Real Docker Infrastructure            │
+│  ┌───────────────────────────────────┐  │
+│  │ NEAR Localnet (nearcore)          │  │
+│  │  - Real blockchain                │  │
+│  │  - RPC: localhost:3030            │  │
+│  └───────────────────────────────────┘  │
+│  ┌───────────────────────────────────┐  │
+│  │ MPC Network (github.com/near/mpc) │  │
+│  │  - Node 1: localhost:3000         │  │
+│  │  - Node 2: localhost:3001         │  │
+│  │  - Node 3: localhost:3002         │  │
+│  │  - Real threshold signatures      │  │
+│  └───────────────────────────────────┘  │
+│  ┌───────────────────────────────────┐  │
+│  │ Deployed Contracts                 │  │
+│  │  - v1.signer-dev.testnet           │  │
+│  │  - Chain Signatures contract       │  │
+│  └───────────────────────────────────┘  │
+└─────────────────────────────────────────┘
+```
+
+## Importing Configuration
+
+### Basic Import Pattern
+```typescript
+// ✅ Good: Import configuration from cross-chain-simulator
+import {
+  LocalnetConfig,
+  getNearRpcUrl,
+  getMpcContractId,
+  getMpcNodes,
+  getNetworkId
+} from '@near-sandbox/cross-chain-simulator';
+
+// Build configuration object
+const localnetConfig: LocalnetConfig = {
+  rpcUrl: getNearRpcUrl(),           // http://localhost:3030
+  mpcContractId: getMpcContractId(),  // v1.signer-dev.testnet
+  mpcNodes: getMpcNodes(),            // [http://localhost:3000, ...]
+  networkId: getNetworkId() || 'localnet'
+};
+```
+
+### Configuration with Overrides
+```typescript
+// ✅ Good: Allow configuration overrides for testing
+import { LocalnetConfig, getNearRpcUrl, getMpcContractId } from '@near-sandbox/cross-chain-simulator';
+
+function createLocalnetConfig(
+  overrides?: Partial<LocalnetConfig>
+): LocalnetConfig {
+  return {
+    rpcUrl: getNearRpcUrl(),
+    mpcContractId: getMpcContractId(),
+    mpcNodes: getMpcNodes(),
+    networkId: 'localnet',
+    ...overrides // Allow test overrides
+  };
+}
+
+// Usage
+const config = createLocalnetConfig({
+  rpcUrl: 'http://custom-rpc:3030' // Override for testing
+});
+```
+
+## NearExecutionAdapter Integration
+
+### LocalnetNearExecutor Implementation
+```typescript
+import { connect, keyStores, KeyPair } from 'near-api-js';
+import { LocalnetConfig, getNearRpcUrl, getNetworkId } from '@near-sandbox/cross-chain-simulator';
+import { NearExecutionAdapter } from '../types';
+
+/**
+ * LocalnetNearExecutor - Executes real NEAR transactions on localnet
+ * 
+ * Uses RPC connection from cross-chain-simulator which provides:
+ * - Real NEAR blockchain (not mocked)
+ * - Real transaction finality
+ * - Production-equivalent behavior
+ */
+export class LocalnetNearExecutor implements NearExecutionAdapter {
+  private near: any;
+  private keyStore: keyStores.KeyStore;
+  private config: LocalnetConfig;
+
+  constructor(config?: Partial<LocalnetConfig>) {
+    // Import localnet configuration from cross-chain-simulator
+    this.config = {
+      rpcUrl: config?.rpcUrl || getNearRpcUrl(),
+      networkId: config?.networkId || getNetworkId() || 'localnet',
+      ...config
+    };
+
+    this.keyStore = new keyStores.InMemoryKeyStore();
+  }
+
+  async initialize(): Promise<void> {
+    this.near = await connect({
+      networkId: this.config.networkId,
+      keyStore: this.keyStore,
+      nodeUrl: this.config.rpcUrl,
+      headers: this.config.headers || {}
+    });
+
+    console.log('[ADAPTER] Connected to NEAR localnet:', {
+      rpc: this.config.rpcUrl,
+      network: this.config.networkId
+    });
+  }
+
+  async sendNearTransfer(
+    sender: string,
+    encryptedKey: string,
+    recipient: string,
+    amountNear: string
+  ): Promise<{ txHash: string; blockHeight: number }> {
+    // Ensure initialized
+    if (!this.near) {
+      await this.initialize();
+    }
+
+    // 1. Decrypt the sender's private key
+    const keyPair = this.decryptKeyPair(encryptedKey);
+
+    // 2. Add key to keystore temporarily
+    await this.keyStore.setKey(this.config.networkId, sender, keyPair);
+
+    // 3. Get account connection
+    const account = await this.near.account(sender);
+
+    // 4. Convert NEAR to yoctoNEAR
+    const amountYocto = (parseFloat(amountNear) * Math.pow(10, 24)).toFixed(0);
+
+    console.log('[ADAPTER] Executing REAL NEAR transfer:', {
+      from: sender,
+      to: recipient,
+      amount: amountNear + ' NEAR',
+      yocto: amountYocto,
+      rpc: this.config.rpcUrl
+    });
+
+    // 5. Execute REAL transfer on localnet
+    const result = await account.sendMoney(recipient, amountYocto);
+
+    // 6. Cleanup keystore
+    await this.keyStore.removeKey(this.config.networkId, sender);
+
+    console.log('[ADAPTER] Real NEAR transfer completed:', {
+      txHash: result.transaction.hash,
+      blockHeight: result.transaction.blockHeight,
+      rpc: this.config.rpcUrl
+    });
+
+    return {
+      txHash: result.transaction.hash,
+      blockHeight: result.transaction.blockHeight
+    };
+  }
+
+  private decryptKeyPair(encryptedKey: string): KeyPair {
+    // Decrypt using your key management scheme
+    const secretKey = this.decryptKey(encryptedKey);
+    return KeyPair.fromString(secretKey);
+  }
+
+  private decryptKey(encryptedKey: string): string {
+    // Implementation depends on your encryption scheme
+    // For localnet development, keys might be stored in plaintext or simple encryption
+    if (process.env.NODE_ENV === 'development') {
+      return Buffer.from(encryptedKey, 'base64').toString('utf-8');
+    }
+    // Production decryption logic
+    throw new Error('Production decryption not implemented');
+  }
+}
+```
+
+## CrossChainAdapter Integration
+
+### LocalnetMPCAdapter Implementation
+```typescript
+import { connect, keyStores } from 'near-api-js';
+import { createHash } from 'crypto';
+import {
+  LocalnetConfig,
+  getNearRpcUrl,
+  getMpcContractId,
+  getMpcNodes,
+  getNetworkId
+} from '@near-sandbox/cross-chain-simulator';
+import { CrossChainAdapter } from '../types';
+
+/**
+ * LocalnetMPCAdapter - Real MPC-based Chain Signatures for localnet
+ * 
+ * Connects to real MPC nodes (https://github.com/near/mpc) running locally.
+ * This provides the same Chain Signatures functionality as mainnet but in a 
+ * local development environment.
+ */
+export class LocalnetMPCAdapter implements CrossChainAdapter {
+  private near: any;
+  private mpcContractId: string;
+  private config: LocalnetConfig;
+
+  constructor(config?: Partial<LocalnetConfig>) {
+    // Import MPC configuration from cross-chain-simulator
+    this.config = {
+      rpcUrl: config?.rpcUrl || getNearRpcUrl(),
+      networkId: config?.networkId || getNetworkId() || 'localnet',
+      mpcContractId: config?.mpcContractId || getMpcContractId(),
+      mpcNodes: config?.mpcNodes || getMpcNodes(),
+      ...config
+    };
+
+    this.mpcContractId = this.config.mpcContractId;
+  }
+
+  async initialize(): Promise<void> {
+    this.near = await connect({
+      networkId: this.config.networkId,
+      keyStore: new keyStores.InMemoryKeyStore(),
+      nodeUrl: this.config.rpcUrl,
+    });
+
+    console.log('[MPC] Connected to localnet MPC:', {
+      contract: this.mpcContractId,
+      nodes: this.config.mpcNodes?.length || 0,
+      rpc: this.config.rpcUrl,
+      network: this.config.networkId
+    });
+
+    // Verify MPC nodes are responsive
+    await this.healthCheck();
+  }
+
+  async deriveAddress(
+    nearAccount: string,
+    chain: string
+  ): Promise<{ address: string; publicKey: string }> {
+    // Ensure initialized
+    if (!this.near) {
+      await this.initialize();
+    }
+
+    // Use REAL MPC network to derive address via Chain Signatures
+    const path = `${nearAccount},${chain}`;
+
+    console.log('[MPC] Deriving address via real MPC:', {
+      account: nearAccount,
+      chain,
+      path,
+      contract: this.mpcContractId
+    });
+
+    try {
+      // Call REAL v1.signer contract on localnet
+      const account = await this.near.account(this.mpcContractId);
+      const result = await account.viewFunction({
+        contractId: this.mpcContractId,
+        methodName: 'public_key',
+        args: { path }
+      });
+
+      // Convert MPC-derived public key to target chain address
+      const address = this.publicKeyToAddress(result.public_key, chain);
+      
+      console.log('[MPC] Real address derived:', {
+        chain,
+        publicKey: result.public_key.substring(0, 20) + '...',
+        address: address.substring(0, 20) + '...'
+      });
+
+      return { 
+        address, 
+        publicKey: result.public_key 
+      };
+
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[MPC] Address derivation failed:', {
+        account: nearAccount,
+        chain,
+        contract: this.mpcContractId,
+        error: errorMessage
+      });
+      
+      throw new Error(`MPC address derivation failed: ${errorMessage}`);
+    }
+  }
+
+  async simulateDestinationTx(params: {
+    chain: string;
+    correlateTo: string;
+  }): Promise<string> {
+    // For destination chains, we simulate the transaction
+    // In production, this would be a real cross-chain bridge transaction
+    
+    console.log('[MPC] Simulating destination tx:', {
+      chain: params.chain,
+      correlatedTo: params.correlateTo.substring(0, 20) + '...'
+    });
+
+    const baseHash = params.correlateTo;
+    const chainPrefix = this.getChainPrefix(params.chain);
+
+    // Create deterministic hash correlated to NEAR transaction
+    const combined = `${baseHash}:${params.chain}:destination`;
+    const hash = createHash('sha256').update(combined).digest('hex');
+
+    return chainPrefix + hash.substring(0, 64);
+  }
+
+  private async healthCheck(): Promise<void> {
+    try {
+      // Check MPC contract is accessible
+      const account = await this.near.account(this.mpcContractId);
+      await account.viewFunction({
+        contractId: this.mpcContractId,
+        methodName: 'public_key',
+        args: { path: 'healthcheck' }
+      });
+
+      console.log('[MPC] Health check passed - MPC network operational');
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.warn('[MPC] Health check failed - MPC network may not be ready:', {
+        contract: this.mpcContractId,
+        rpc: this.config.rpcUrl,
+        error: errorMessage
+      });
+      // Don't throw - allow initialization to continue
+    }
+  }
+
+  private publicKeyToAddress(publicKey: string, chain: string): string {
+    switch (chain.toLowerCase()) {
+      case 'ethereum':
+        return this.derivedKeyToEthAddress(publicKey);
+      case 'bitcoin':
+        return this.derivedKeyToBtcAddress(publicKey);
+      case 'dogecoin':
+        return this.derivedKeyToDogeAddress(publicKey);
+      default:
+        return publicKey;
+    }
+  }
+
+  private derivedKeyToEthAddress(publicKey: string): string {
+    const hash = createHash('sha256').update(publicKey).digest('hex');
+    return '0x' + hash.substring(hash.length - 40);
+  }
+
+  private derivedKeyToBtcAddress(publicKey: string): string {
+    const hash = createHash('sha256').update(publicKey).digest('hex');
+    return '1' + hash.substring(0, 33);
+  }
+
+  private derivedKeyToDogeAddress(publicKey: string): string {
+    const hash = createHash('sha256').update(publicKey).digest('hex');
+    return 'D' + hash.substring(0, 33);
+  }
+
+  private getChainPrefix(chain: string): string {
+    const prefixes: Record<string, string> = {
+      ethereum: '0x',
+      bitcoin: '',
+      dogecoin: 'D',
+    };
+    return prefixes[chain.toLowerCase()] || '';
+  }
+}
+```
+
+## Simulator Integration
+
+### Using Real Infrastructure in Simulator
+```typescript
+import { OneClickSimulator } from './intents/simulator';
+import {
+  LocalnetConfig,
+  getNearRpcUrl,
+  getMpcContractId,
+  getMpcNodes
+} from '@near-sandbox/cross-chain-simulator';
+import { LocalnetNearExecutor } from './adapters/LocalnetNearExecutor';
+import { LocalnetMPCAdapter } from './adapters/LocalnetMPCAdapter';
+
+// Build configuration from cross-chain-simulator
+const localnetConfig: LocalnetConfig = {
+  rpcUrl: getNearRpcUrl(),
+  mpcContractId: getMpcContractId(),
+  mpcNodes: getMpcNodes(),
+  networkId: 'localnet'
+};
+
+// Create adapters with real infrastructure
+const nearExec = new LocalnetNearExecutor(localnetConfig);
+const crossChain = new LocalnetMPCAdapter(localnetConfig);
+
+// Initialize adapters
+await nearExec.initialize();
+await crossChain.initialize();
+
+// Create simulator with REAL infrastructure
+const simulator = new OneClickSimulator({
+  crossChain,  // Real MPC nodes
+  nearExec     // Real NEAR RPC
+});
+
+// Now all operations use real blockchain infrastructure
+const quote = await simulator.requestQuote({
+  swapType: 'EXACT_INPUT',
+  originAsset: 'near:native',
+  destinationAsset: 'ethereum:usdc.eth',
+  amount: '1000000000000000000000000',
+  refundTo: 'alice.near',
+  recipient: '0x123...abc'
+});
+```
+
+## Environment Detection
+
+### Checking Infrastructure Availability
+```typescript
+import { getNearRpcUrl } from '@near-sandbox/cross-chain-simulator';
+
+async function isLocalnetAvailable(): Promise<boolean> {
+  try {
+    const rpcUrl = getNearRpcUrl();
+    const response = await fetch(`${rpcUrl}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'status' })
+    });
+    
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Use fallback based on availability
+const config = await isLocalnetAvailable()
+  ? createLocalnetConfig()
+  : createMockConfig();
+```
+
+## Error Handling for Infrastructure
+
+### Handling Missing Infrastructure
+```typescript
+// ✅ Good: Graceful fallback when infrastructure unavailable
+async function createAdapter(): Promise<CrossChainAdapter> {
+  try {
+    const config = {
+      rpcUrl: getNearRpcUrl(),
+      mpcContractId: getMpcContractId(),
+      mpcNodes: getMpcNodes()
+    };
+
+    const adapter = new LocalnetMPCAdapter(config);
+    await adapter.initialize();
+    return adapter;
+  } catch (error) {
+    console.warn('[INTENTS] Real MPC unavailable, using mock:', error);
+    return new MockCrossChainAdapter();
+  }
+}
+```
+
+## Development Workflow
+
+### Starting Infrastructure
+```bash
+# From cross-chain-simulator directory
+npm run start:localnet
+
+# This starts:
+# - NEAR localnet (nearcore) on localhost:3030
+# - MPC network (3-8 nodes) on localhost:3000+
+# - Deploys v1.signer contract
+```
+
+### Testing Integration
+```typescript
+// Test real infrastructure integration
+describe('Real Infrastructure Integration', () => {
+  let simulator: OneClickSimulator;
+  let nearExec: LocalnetNearExecutor;
+  let crossChain: LocalnetMPCAdapter;
+
+  beforeAll(async () => {
+    const config = createLocalnetConfig();
+    nearExec = new LocalnetNearExecutor(config);
+    crossChain = new LocalnetMPCAdapter(config);
+    
+    await nearExec.initialize();
+    await crossChain.initialize();
+
+    simulator = new OneClickSimulator({ crossChain, nearExec });
+  });
+
+  it('should execute real NEAR transfer', async () => {
+    const quote = await simulator.requestQuote({
+      swapType: 'EXACT_INPUT',
+      originAsset: 'near:native',
+      destinationAsset: 'near:wrap.near',
+      amount: '1000000000000000000000000',
+      refundTo: 'alice.near',
+      recipient: 'bob.near'
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    const status = await simulator.getSwapStatus(quote.quoteId);
+    expect(status.status).toBe('SUCCESS');
+    expect(status.swapDetails?.nearTxHashes).toBeDefined();
+  });
+});
+```
+
+## Best Practices Checklist
+
+When integrating with cross-chain-simulator:
+
+- [ ] Always import configuration using provided functions (getNearRpcUrl, etc.)
+- [ ] Allow configuration overrides for testing scenarios
+- [ ] Initialize adapters before use
+- [ ] Handle infrastructure unavailability gracefully
+- [ ] Log connection details for debugging
+- [ ] Use health checks before operations
+- [ ] Clean up connections and keystores after operations
+- [ ] Provide fallback to mocks when infrastructure unavailable
+- [ ] Document configuration sources in code comments
+- [ ] Test both real infrastructure and mock scenarios
+
+## Common Integration Patterns
+
+### Factory Pattern with Real Infrastructure
+```typescript
+import { createOneClickClient } from './factory';
+import { LocalnetMPCAdapter } from './adapters/LocalnetMPCAdapter';
+import { LocalnetNearExecutor } from './adapters/LocalnetNearExecutor';
+import { getNearRpcUrl, getMpcContractId, getMpcNodes } from '@near-sandbox/cross-chain-simulator';
+
+export async function createClientWithRealInfrastructure(): Promise<IOneClickClient> {
+  const config = {
+    rpcUrl: getNearRpcUrl(),
+    mpcContractId: getMpcContractId(),
+    mpcNodes: getMpcNodes(),
+    networkId: 'localnet' as const
+  };
+
+  const crossChain = new LocalnetMPCAdapter(config);
+  const nearExec = new LocalnetNearExecutor(config);
+  
+  await crossChain.initialize();
+  await nearExec.initialize();
+
+  return new OneClickSimulator({ crossChain, nearExec });
+}
+```
+
+### Conditional Real vs Mock
+```typescript
+async function createAdapter(useReal: boolean): Promise<CrossChainAdapter> {
+  if (useReal) {
+    try {
+      const adapter = new LocalnetMPCAdapter({
+        rpcUrl: getNearRpcUrl(),
+        mpcContractId: getMpcContractId(),
+        mpcNodes: getMpcNodes()
+      });
+      await adapter.initialize();
+      return adapter;
+    } catch (error) {
+      console.warn('Failed to initialize real adapter, using mock');
+      return new MockCrossChainAdapter();
+    }
+  }
+  
+  return new MockCrossChainAdapter();
+}
+```
+
+This integration pattern ensures the simulator can seamlessly work with real NEAR and MPC infrastructure while maintaining fallback capabilities for development and testing.

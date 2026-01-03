@@ -57,6 +57,35 @@ This directory contains Cursor AI rules to guide development of the NEAR Intents
 - Code organization and performance
 - Documentation and testing standards
 
+#### [`type-safety-and-interfaces.mdc`](rules/type-safety-and-interfaces.mdc)
+**Purpose**: Advanced TypeScript type patterns and interface design
+**When to use**: When working with complex types, type guards, or interface design
+**Covers**:
+- Strict type safety patterns
+- Branded types and type guards
+- Discriminated unions
+- Template literal types
+- Advanced type transformations
+
+#### [`error-handling-patterns.mdc`](rules/error-handling-patterns.mdc)
+**Purpose**: Comprehensive error handling and recovery patterns
+**When to use**: When implementing error handling, validation, or recovery logic
+**Covers**:
+- Custom error class hierarchy
+- Validation patterns
+- Graceful degradation strategies
+- Retry and circuit breaker patterns
+- Structured error logging
+
+#### [`integration-with-cross-chain-simulator.mdc`](rules/integration-with-cross-chain-simulator.mdc)
+**Purpose**: Integration patterns for @near-sandbox/cross-chain-simulator
+**When to use**: When integrating real NEAR localnet or MPC infrastructure
+**Covers**:
+- Importing configuration from cross-chain-simulator
+- Implementing adapters with real infrastructure
+- Environment detection and fallbacks
+- Testing with real blockchain infrastructure
+
 ## How to Use These Rules
 
 ### For New Development

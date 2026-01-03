@@ -1,9 +1,5 @@
 ---
-description: Code quality standards, TypeScript best practices, and maintenance guidelines for the NEAR Intents Simulator
-globs:
-  - "src/**/*.ts"
-applicablePhases: [1, 2, 3]
-alwaysApply: false
+inclusion: always
 ---
 
 # Code Quality Standards

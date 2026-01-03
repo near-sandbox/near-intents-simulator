@@ -1,12 +1,5 @@
 ---
-description: Testing patterns, debugging techniques, and development workflows for the NEAR Intents Simulator
-globs:
-  - "**/__tests__/**/*.ts"
-  - "**/*.test.ts"
-  - "**/*.spec.ts"
-  - "src/**/*.ts"
-applicablePhases: [1, 2, 3]
-alwaysApply: false
+inclusion: always
 ---
 
 # Testing & Development Guide
