@@ -1,0 +1,187 @@
+---
+description: NearExecutionAdapter implementation for NEAR transfers
+globs:
+  - "src/**/*near*.ts"
+  - "src/**/*executor*.ts"
+  - "src/**/*adapter*.ts"
+alwaysApply: false
+---
+
+# NearExecutionAdapter Implementation
+
+**How to implement NearExecutionAdapter for real NEAR transfers on localnet**
+
+## Interface Definition
+
+```typescript
+interface NearExecutionAdapter {
+  sendNearTransfer(
+    sender: string,
+    encryptedKey: string,
+    recipient: string,
+    amountNear: string
+  ): Promise<{ txHash: string; blockHeight: number }>;
+}
+```
+
+## Core Principle
+
+**We don't mock the blockchain.** The simulator runs against real NEAR localnet with real MPC nodes. Use `LocalnetNearExecutor` for development.
+
+## Localnet Implementation (Production-Like)
+
+```typescript
+import { connect, keyStores, KeyPair } from 'near-api-js';
+import { LocalnetConfig } from '@near-sandbox/cross-chain-simulator';
+
+export class LocalnetNearExecutor implements NearExecutionAdapter {
+  private near: any;
+  private keyStore: keyStores.KeyStore;
+  private config: LocalnetConfig;
+
+  constructor(config?: Partial<LocalnetConfig>) {
+    this.config = {
+      rpcUrl: config?.rpcUrl || 'http://localhost:3030',
+      networkId: 'localnet',
+      mpcContractId: config?.mpcContractId || 'v1.signer-dev.testnet',
+      ...config
+    };
+    this.keyStore = new keyStores.InMemoryKeyStore();
+  }
+
+  async initialize(): Promise<void> {
+    this.near = await connect({
+      networkId: this.config.networkId,
+      keyStore: this.keyStore,
+      nodeUrl: this.config.rpcUrl,
+    });
+    console.log('[ADAPTER] Connected to NEAR localnet:', this.config.rpcUrl);
+  }
+
+  async sendNearTransfer(
+    sender: string,
+    encryptedKey: string,
+    recipient: string,
+    amountNear: string
+  ): Promise<{ txHash: string; blockHeight: number }> {
+    const keyPair = this.decryptKeyPair(encryptedKey);
+    await this.keyStore.setKey(this.config.networkId, sender, keyPair);
+
+    const account = await this.near.account(sender);
+    const amountYocto = (parseFloat(amountNear) * Math.pow(10, 24)).toFixed(0);
+
+    console.log('[ADAPTER] Executing REAL NEAR transfer:', {
+      from: sender, to: recipient, amount: amountNear + ' NEAR'
+    });
+
+    const result = await account.sendMoney(recipient, amountYocto);
+    await this.keyStore.clear();
+
+    return {
+      txHash: result.transaction.hash,
+      blockHeight: result.transaction.blockHeight
+    };
+  }
+
+  private decryptKeyPair(encryptedKey: string): KeyPair {
+    const secretKey = Buffer.from(encryptedKey, 'base64').toString('utf-8');
+    return KeyPair.fromString(secretKey);
+  }
+}
+```
+
+## Mock Implementation (Testing Only)
+
+**Use only for unit tests or CI/CD without infrastructure:**
+
+```typescript
+export class MockNearExecutor implements NearExecutionAdapter {
+  private transactions: Map<string, any> = new Map();
+
+  async sendNearTransfer(
+    sender: string,
+    encryptedKey: string,
+    recipient: string,
+    amountNear: string
+  ): Promise<{ txHash: string; blockHeight: number }> {
+    const txHash = this.generateMockTxHash();
+    const blockHeight = Math.floor(Date.now() / 1000);
+
+    this.transactions.set(txHash, { sender, recipient, amount: amountNear });
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    return { txHash, blockHeight };
+  }
+
+  private generateMockTxHash(): string {
+    return Array.from({ length: 44 }, () =>
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 62)]
+    ).join('');
+  }
+}
+```
+
+## Error Handling Pattern
+
+```typescript
+async sendNearTransfer(...): Promise<{ txHash: string; blockHeight: number }> {
+  try {
+    this.validateInputs(sender, recipient, amountNear);
+    const result = await this.near.account(sender).sendMoney(recipient, amount);
+    return { txHash: result.transaction.hash, blockHeight: result.transaction.blockHeight };
+  } catch (error) {
+    console.error('[ADAPTER] NEAR transfer failed:', { sender, recipient, error: error.message });
+    throw new Error(`NEAR transfer failed: ${error.message}`);
+  }
+}
+
+private validateInputs(sender: string, recipient: string, amount: string) {
+  if (!sender || !recipient) throw new Error('Sender and recipient are required');
+  if (parseFloat(amount) <= 0) throw new Error('Amount must be positive');
+}
+```
+
+## Address Validation
+
+```typescript
+class AddressValidator {
+  static isValidNearAddress(address: string): boolean {
+    return /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/.test(address) ||
+           /^[0-9a-f]{64}$/.test(address);
+  }
+}
+```
+
+## Factory Pattern
+
+```typescript
+export class AdapterFactory {
+  static createNearExecutor(environment: string): NearExecutionAdapter {
+    switch (environment) {
+      case 'localnet':
+        return new LocalnetNearExecutor();
+      case 'testnet':
+        return new TestnetNearExecutor();
+      case 'mock':
+      default:
+        return new MockNearExecutor();
+    }
+  }
+}
+```
+
+## When to Use Each Implementation
+
+| Environment | Adapter | Use Case |
+|-------------|---------|----------|
+| Development | `LocalnetNearExecutor` | Real NEAR transactions on localnet |
+| Testnet | `TestnetNearExecutor` | Testing on NEAR testnet |
+| Unit Tests | `MockNearExecutor` | Fast tests without infrastructure |
+| CI/CD | `MockNearExecutor` | Automated pipelines |
+
+## Key Notes
+
+1. **Never mock in development** - Use LocalnetNearExecutor
+2. **Real transactions** - All NEAR operations are on-chain
+3. **Key management** - Implement proper encryption for production
+4. **Error handling** - Always validate inputs and handle failures

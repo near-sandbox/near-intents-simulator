@@ -1,0 +1,105 @@
+---
+alwaysApply: true
+description: Layer 4 entry rule - NEAR Intents Simulator for 1Click API
+---
+
+# Layer 4: Intents Protocol - Entry Rule
+
+**TypeScript library simulating NEAR's 1Click API for localnet development**
+
+## Layer Position
+
+```
+Layer 1: NEAR Base          → AWSNodeRunner
+Layer 2: NEAR Services      → near-localnet-services
+Layer 3: Chain Signatures   → cross-chain-simulator (includes MPC)
+Layer 4: Intents Protocol   → This repository ← YOU ARE HERE
+Layer 5: User Applications  → Your dApp
+```
+
+**Depends on**: Layer 3 (Chain Signatures)
+**Provides to**: Layer 5 (User Applications) - 1Click API
+
+## Core Principle
+
+**We don't mock the blockchain.** This simulator runs against real NEAR localnet with real MPC nodes. Only external chain transactions (Ethereum, Bitcoin) are simulated.
+
+## What This Layer Provides
+
+- `OneClickSimulator` class with quote/execution simulation
+- Asset registry: NEAR, Ethereum, Bitcoin, Dogecoin
+- Cross-chain route calculation
+- Production-equivalent adapter interfaces
+
+## Key Interfaces
+
+```typescript
+interface NearExecutionAdapter {
+  sendNearTransfer(sender, key, recipient, amount): Promise<{txHash, blockHeight}>;
+}
+
+interface CrossChainAdapter {
+  deriveAddress(nearAccount, chain): Promise<{address, publicKey}>;
+  simulateDestinationTx(params): Promise<string>;
+}
+```
+
+## Project Structure
+
+```
+src/
+├── index.ts          # Main exports
+├── types.ts          # TypeScript interfaces
+├── factory.ts        # Client factory
+├── config.ts         # Configuration
+└── intents/
+    └── simulator.ts  # Core simulator
+```
+
+## Commands
+
+```bash
+npm run build         # Build library
+npm run watch         # Watch mode
+npx tsc --noEmit      # Type check
+npm publish           # Publish to npm
+```
+
+## Specialized Rules
+
+Request these rules when working on specific tasks:
+
+- **adapters-near.mdc** - NearExecutionAdapter implementation
+- **adapters-crosschain.mdc** - CrossChainAdapter implementation
+- **near-intents-architecture.mdc** - NEAR Intents protocol patterns
+- **error-handling.mdc** - Error patterns and recovery
+- **testing-development.mdc** - Testing patterns
+
+## Usage Example
+
+```typescript
+import { OneClickSimulator } from '@near-sandbox/near-intents-simulator';
+
+const simulator = new OneClickSimulator({ crossChain: adapter });
+
+const quote = await simulator.requestQuote({
+  swapType: 'EXACT_INPUT',
+  originAsset: 'near:wrap.near',
+  destinationAsset: 'ethereum:usdc.eth',
+  amount: '1000000000000000000000000',
+  refundTo: 'alice.near',
+  recipient: '0x123...abc'
+});
+```
+
+## Key Notes
+
+1. **Depends on Layer 3**: Requires Chain Signatures to be deployed
+2. **Real infrastructure**: Uses real NEAR + MPC, not mocks
+3. **npm package**: `@near-sandbox/near-intents-simulator`
+4. **TypeScript-first**: Strong typing, interfaces, factory pattern
+
+## Troubleshooting
+
+See `near-localnet-orchestrator/docs/lessons-learned/NEAR_LOCALNET_LESSONS_LEARNED.md`:
+- GOTCHA #16-17: Layer 4 config dependencies, real infrastructure principle

@@ -1,0 +1,240 @@
+---
+description: CrossChainAdapter implementation for MPC-based address derivation
+globs:
+  - "src/**/*crosschain*.ts"
+  - "src/**/*mpc*.ts"
+  - "src/**/*chain*.ts"
+  - "src/**/*adapter*.ts"
+alwaysApply: false
+---
+
+# CrossChainAdapter Implementation
+
+**How to implement CrossChainAdapter for real MPC-based Chain Signatures**
+
+## Interface Definition
+
+```typescript
+interface CrossChainAdapter {
+  deriveAddress(nearAccount: string, chain: string): Promise<{ 
+    address: string; 
+    publicKey: string 
+  }>;
+  
+  simulateDestinationTx(params: { 
+    chain: string; 
+    correlateTo: string 
+  }): Promise<string>;
+}
+```
+
+## Core Principle
+
+**We don't mock MPC.** The simulator connects to real MPC nodes running locally via [NEAR MPC](https://github.com/near/mpc). Use `LocalnetMPCAdapter` for development.
+
+## Integration with cross-chain-simulator
+
+```typescript
+import { 
+  LocalnetConfig,
+  getNearRpcUrl,
+  getMpcContractId,
+  getMpcNodes
+} from '@near-sandbox/cross-chain-simulator';
+
+const localnetConfig: LocalnetConfig = {
+  rpcUrl: getNearRpcUrl(),           // http://localhost:3030
+  mpcContractId: getMpcContractId(), // v1.signer-dev.testnet
+  mpcNodes: getMpcNodes(),           // [http://localhost:3000, ...]
+  networkId: 'localnet'
+};
+
+const mpcAdapter = new LocalnetMPCAdapter(localnetConfig);
+```
+
+## Localnet MPC Implementation
+
+```typescript
+import { connect, keyStores } from 'near-api-js';
+import { createHash } from 'crypto';
+import { LocalnetConfig } from '@near-sandbox/cross-chain-simulator';
+
+export class LocalnetMPCAdapter implements CrossChainAdapter {
+  private near: any;
+  private mpcContractId: string;
+  private config: LocalnetConfig;
+
+  constructor(config?: Partial<LocalnetConfig>) {
+    this.config = {
+      rpcUrl: config?.rpcUrl || 'http://localhost:3030',
+      networkId: 'localnet',
+      mpcContractId: config?.mpcContractId || 'v1.signer-dev.testnet',
+      mpcNodes: config?.mpcNodes || [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002'
+      ],
+      ...config
+    };
+    this.mpcContractId = this.config.mpcContractId;
+  }
+
+  async initialize(): Promise<void> {
+    this.near = await connect({
+      networkId: this.config.networkId,
+      keyStore: new keyStores.InMemoryKeyStore(),
+      nodeUrl: this.config.rpcUrl,
+    });
+    console.log('[MPC] Connected to localnet MPC:', {
+      contract: this.mpcContractId,
+      nodes: this.config.mpcNodes.length
+    });
+    await this.healthCheck();
+  }
+
+  async deriveAddress(nearAccount: string, chain: string): Promise<{ 
+    address: string; 
+    publicKey: string 
+  }> {
+    const path = `${nearAccount},${chain}`;
+    console.log('[MPC] Deriving address via real MPC:', { account: nearAccount, chain });
+
+    try {
+      const account = await this.near.account(this.mpcContractId);
+      const result = await account.viewFunction({
+        contractId: this.mpcContractId,
+        methodName: 'public_key',
+        args: { path }
+      });
+
+      const address = this.publicKeyToAddress(result.public_key, chain);
+      return { address, publicKey: result.public_key };
+    } catch (error) {
+      console.error('[MPC] Address derivation failed:', error);
+      throw new Error(`MPC address derivation failed: ${error.message}`);
+    }
+  }
+
+  async simulateDestinationTx(params: { chain: string; correlateTo: string }): Promise<string> {
+    const combined = `${params.correlateTo}:${params.chain}:destination`;
+    const hash = createHash('sha256').update(combined).digest('hex');
+    return this.getChainPrefix(params.chain) + hash.substring(0, 64);
+  }
+
+  private async healthCheck(): Promise<void> {
+    try {
+      const account = await this.near.account(this.mpcContractId);
+      await account.viewFunction({
+        contractId: this.mpcContractId,
+        methodName: 'public_key',
+        args: { path: 'healthcheck' }
+      });
+      console.log('[MPC] Health check passed');
+    } catch (error) {
+      console.warn('[MPC] Health check failed:', error.message);
+    }
+  }
+
+  private publicKeyToAddress(publicKey: string, chain: string): string {
+    const hash = createHash('sha256').update(publicKey).digest('hex');
+    switch (chain.toLowerCase()) {
+      case 'ethereum': return '0x' + hash.substring(hash.length - 40);
+      case 'bitcoin': return '1' + hash.substring(0, 33);
+      case 'dogecoin': return 'D' + hash.substring(0, 33);
+      default: return publicKey;
+    }
+  }
+
+  private getChainPrefix(chain: string): string {
+    return { ethereum: '0x', bitcoin: '', dogecoin: 'D' }[chain.toLowerCase()] || '';
+  }
+}
+```
+
+## Mock Implementation (Testing Only)
+
+```typescript
+export class MockCrossChainAdapter implements CrossChainAdapter {
+  private derivedAddresses: Map<string, { address: string; publicKey: string }> = new Map();
+
+  async deriveAddress(nearAccount: string, chain: string): Promise<{ 
+    address: string; 
+    publicKey: string 
+  }> {
+    const key = `${nearAccount}:${chain}`;
+    if (this.derivedAddresses.has(key)) return this.derivedAddresses.get(key)!;
+
+    const result = {
+      address: this.generateMockAddress(chain),
+      publicKey: this.generateMockPublicKey(chain)
+    };
+    this.derivedAddresses.set(key, result);
+    return result;
+  }
+
+  async simulateDestinationTx(params: { chain: string; correlateTo: string }): Promise<string> {
+    const hash = createHash('sha256').update(`${params.correlateTo}:${params.chain}`).digest('hex');
+    return this.getChainPrefix(params.chain) + hash.substring(0, 40);
+  }
+
+  private generateMockAddress(chain: string): string {
+    const prefix = { ethereum: '0x', bitcoin: '1', dogecoin: 'D' }[chain.toLowerCase()] || '';
+    const random = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    return prefix + random;
+  }
+
+  private generateMockPublicKey(chain: string): string {
+    const random = Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    return chain === 'ethereum' ? '0x' + random : 'ed25519:' + random;
+  }
+
+  private getChainPrefix(chain: string): string {
+    return { ethereum: '0x', bitcoin: '', dogecoin: 'D' }[chain.toLowerCase()] || '';
+  }
+}
+```
+
+## Architecture: What's Real vs Mocked
+
+### Real (Always)
+| Component | Source |
+|-----------|--------|
+| NEAR Blockchain | `cross-chain-simulator` |
+| MPC Network (3-8 nodes) | [github.com/near/mpc](https://github.com/near/mpc) |
+| Chain Signatures | MPC network via `v1.signer` |
+| NEAR RPC | Imported from `cross-chain-simulator` |
+
+### Simulated (Development Only)
+| Component | Reason |
+|-----------|--------|
+| Destination Chain Txs | External blockchain not running locally |
+| Price Feeds | Not critical to Intents flow |
+
+### Never Mock
+- MPC signature generation
+- Chain Signatures address derivation
+- NEAR RPC calls
+- Smart contract interactions
+
+## Factory Pattern
+
+```typescript
+export class AdapterFactory {
+  static createCrossChainAdapter(type: string): CrossChainAdapter {
+    switch (type) {
+      case 'chain-signatures':
+        return new LocalnetMPCAdapter();
+      case 'mock':
+      default:
+        return new MockCrossChainAdapter();
+    }
+  }
+}
+```
+
+## Key Notes
+
+1. **Real MPC nodes** - Use LocalnetMPCAdapter for development
+2. **Real threshold signatures** - MPC network generates real signatures
+3. **Mock only for tests** - MockCrossChainAdapter for unit tests only
+4. **Depends on Layer 3** - Requires cross-chain-simulator to be running
